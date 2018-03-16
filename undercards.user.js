@@ -136,6 +136,13 @@ eventManager.on("GameStart", function battleLogger() {
     }
   });
 
+  eventManager.on('PreGameEvent', function callPreEvent(data) {
+    if (finished) return;
+    const event = eventManager.emit(`${data.action}:before`, data, this.cancelable);
+    if (!event.ran) return;
+    this.canceled = event.canceled;
+  });
+
   eventManager.on('getAllGameInfos getGameStarted getReconnection', function initBattle(data) {
     debug(data, 'debugging.raw.game');
     let you, enemy;
@@ -344,15 +351,14 @@ eventManager.on("GameStart", function battleLogger() {
     } else if (data.cause === "Disconnection") {
       log.add(`${data.looser} disconnected.`);
     }
-    if (typeof music !== 'undefined') {
-      music.addEventListener('playing', function () {
-        if (localStorage.getItem('gameMusicDisabled')) {
-          music.pause();
-        }
-      });
-    }
     // TODO: colorize
     log.add(`${data.winner} beat ${data.looser}`);
+  });
+  eventManager.on('getResult:before', function overrideResult(data) {
+    if (fn.isSet('setting.disable.resultToast')) return;
+    // We need to mark the game as finished (like the source does)
+    finish = true;
+    this.canceled = true;
     const toast = {
       title: 'Game Finished',
       text: 'Return Home',
@@ -364,14 +370,168 @@ eventManager.on("GameStart", function battleLogger() {
         },
       },
     };
-    if (!localStorage.getItem('setting.disableResultToast') && fn.toast(toast)) {
-      BootstrapDialog.closeAll();
-    }
+    fn.toast(toast);
   });
   eventManager.on(ignoreEvents.join(' '), function ignore(data) {
     debug(data, 'debugging.raw.ignore');
     debug(data, `debugging.raw.ignore.${this.event}`);
   });
+});
+
+eventManager.on('GameStart', function soundManager() {
+  const canDisableMusic = typeof musicEnabled === 'boolean';
+  let disabledMusic = false;
+  let disabledSound = false;
+
+  function isMusicDisabled() {
+    return !fn.isSet('gameMusicDisabled', null);
+  }
+  function disableMusic() {
+    if (!canDisableMusic || !musicEnabled) return;
+    debug('Disabled music', 'debugging.music');
+    musicEnabled = false;
+    disabledMusic = true;
+  }
+  function disableSound() {
+    if (!soundEnabled) return;
+    debug('Disabled sound', 'debugging.sound');
+    soundEnabled = false;
+    disabledSound = true;
+  }
+  function restoreAudio() {
+    if (disabledMusic) {
+      musicEnabled = true;
+    }
+    if (disabledSound) {
+      soundEnabled = true;
+    }
+  }
+  function stopMusic(audio) { // the "proper" way to stop audio (right as it starts)
+    if (!(audio instanceof Audio)) return;
+    audio.addEventListener('playing', function () {
+      audio.pause();
+    });
+  }
+  function playMusic(src, { volume = 0.2, repeat = false, force = false }) {
+    if (!force && canDisableMusic ? !musicEnabled : isMusicDisabled()) return;
+    music = new Audio(src);
+    music.volume = volume;
+    if (repeat) {
+      music.addEventListener('ended', function () {
+        this.currentTime = 0;
+        this.play();
+      }, false);
+    }
+    music.play();
+  }
+
+  eventManager.on('GameEvent', restoreAudio);
+  eventManager.on('getGameStarted:before getReconnection:before', function disableBGM(data) {
+    if (fn.isSet('setting.disable.bgm')) disableMusic();
+  }).on('getGameStarted:before', function disableGameStart(data) {
+    if (fn.isSet('setting.disable.gameStart')) disableSound();
+  });
+  eventManager.on('getAllGameInfos', function spectateBGM(data) {
+    if (!fn.isSet('setting.enable.bgm.spectate')) return;
+    const numBackground = randomInt(1, 10);
+    console.log('set background', numBackground);
+    // set the new background (ugh)
+    $('body').css('background', `#000 url('images/backgrounds/${numBackground}.png') no-repeat`);
+    playMusic(`musics/themes/${numBackground}.ogg`, { volume: 0.1, repeat: true });
+  });
+  eventManager.on('getCardBoard:before', function disableLegendary(data) {
+    const card = JSON.parse(data.card);
+    const disableLegendary = card.rarity === 'LEGENDARY' && fn.isSet('setting.disable.legendary');
+    const disableDT = card.rarity === 'DETERMINATION' && fn.isSet('setting.disable.determination');
+    if (disableLegendary || disableDT) {
+      disableSound();
+    }
+  });
+  eventManager.on('getSpellPlayed:before', function disableSpells(data) {
+    if (fn.isSet('setting.disable.spells')) disableSound();
+  });
+  eventManager.on('getCardDestroyedHandFull:before', function disableHandFull(data) {
+    if (fn.isSet('setting.disable.handFull')) {
+      setTimeout(disableSound, 1000); // I really don't like this, but it apparently works
+    }
+  }).on('getCardDestroyedHandFull', function restoreHandFull(data) {
+    if (fn.isSet('setting.disable.handFull')) {
+      setTimeout(restoreAudio, 1000); // I really don't like this, but it apparently works
+    }
+  });
+  eventManager.on('getMonsterDestroyed:before getFakeDeath:before', function disableDestroy(data) {
+    if (fn.isSet('setting.disable.destroy')) disableSound();
+  }).on('getFakeDeath:before', function disableDestroyTimeout(data) {
+    if (fn.isSet('setting.disable.destroy')) {
+      setTimeout(disableSound, 1000); // I really don't like this, but it apparently works
+    }
+  }).on('getFakeDeath', function restoreDestroy() {
+    if (fn.isSet('setting.disable.destroy')) {
+      setTimeout(restoreAudio, 1000); // I really don't like this, but it apparently works
+    }
+  });
+  eventManager.on('getUpdatePlayerHp:before', function disablePlayerHealth(data) {
+    if (data.isDamage ? fn.isSet('setting.disable.damage') : fn.isSet('setting.disable.heal')) {
+      disableSound();
+    }
+  });
+  eventManager.on('getVictory:before', function preGame(data) {
+    if (fn.isSet('setting.disable.destroy.enemy')) {
+      setTimeout(disableSound, 750); // untested
+      setTimeout(restoreAudio, 751);
+    }
+    if (data.endPromo) {
+      // Level up is stored in "audio", what a pain.
+      if (data.gameType === "RANKED") {
+        // timeout: 2750
+        let disable = null;
+        if (data.newDivision === 'MASTER') {
+          // reachMaster
+        } else {
+          // rankUp
+        }
+        // music
+        if (disable && fn.isSet(disable)) { // untested
+          // we don't care about re-enabling it
+          setimeout(disableMusic, 2750);
+        }
+      }
+    } else if (data.oldDivision !== "LEGEND" && data.newDivision === "LEGEND") {
+      if (fn.isSet('setting.disable.legendary')) { // untested
+        // we don't care about re-enabling it?
+        setTimeout(disableMusic, 2750);
+      }
+    }
+    if (!data.endPromo) {
+      // More complex stuff
+    }
+  }).on('getDefeat:before', function preGame(data) {
+    if (data.endType === 'Chara') {
+      // 'audio' 'hit'
+      // timeout 750: music 'toomuch'
+    } else {
+      // timeout 750: 'audio' 'soulDeath'
+    }
+    // timeout 750 + 2200: music 'gameover' || 'toomuch'
+    if (data.nbLevelPassed) {
+      // interval, 5
+      // 'audio' plays 'levelUp'
+    }
+    if (data.oldDivision !== data.newDivision && data.newDivision === 'LEGEND') {
+      // timeout 750 + 2200: music 'dogsong'
+    }
+  });
+  eventManager.on('getResult:before', function restoreSpectateMusic(data) {
+    // getResult hasn't been canceled, music is disabled, we disable spectateMusic
+    if (!this.canceled || isMusicDisabled() || fn.isSet('setting.disable.spectateMusic')) return;
+    // Play the music, because it got canceled >.>
+    playMusic('musics/victory.ogg');
+  }).on('getResult', function stopSpectateMusic(data) {
+    // music is undefined, music is not disabled, we do not disable spectate music
+    if (typeof music === 'undefined' || !isMusicDisabled() || !fn.isSet('setting.disable.spectateMusic')) return;
+    stopMusic(music);
+  });
+  // Override toggleMusic?
 });
 
 // === Play hooks
@@ -421,7 +581,7 @@ onPage("Game", function () {
     const oHandler = socket.onmessage;
     socket.onmessage = function onMessageScript(event) {
       const data = JSON.parse(event.data);
-      //eventManager.emit('PreGameEvent', data, true);
+      eventManager.emit('PreGameEvent', data);
       oHandler(event);
       eventManager.emit('GameEvent', data);
     };
@@ -481,8 +641,8 @@ onPage("gameSpectate", function () {
     const oHandler = socket.onmessage;
     socket.onmessage = function onMessageScript(event) {
       const data = JSON.parse(event.data);
-      //eventManager.emit('PreGameEvent', data, true);
-      oHandler(event);
+      const e = eventManager.emit('PreGameEvent', data, data.action === 'getResult');
+      if (!e.canceled) oHandler(event);
       eventManager.emit('GameEvent', data);
     };
   })();

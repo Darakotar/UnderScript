@@ -6,9 +6,9 @@ const footer = $('<div>').css({
 }).html('UnderScript &copy;feildmaster');
 
 // Utilities for undercards.js
-function debug(message, permission = 'debugging') {
-  if (localStorage.getItem(permission) !== "true") return;
-  console.log(message);
+function debug(message, permission = 'debugging', ...rest) {
+  if (!fn.isSet(permission)) return;
+  console.log(message, ...rest);
 }
 
 function onPage(name, fn) {
@@ -47,18 +47,15 @@ const eventManager = (() => {
           // Should we stop processing on cancel? Probably.
           try {
             const meta = { event, cancelable, canceled };
-            ev.call(meta, data);
-            canceled = !!meta.canceled;
+            ev.call(meta, data, meta);
+            canceled = cancelable && meta.canceled;
           } catch (e) {
             console.error(`Error ocurred while parsing event: ${ev.displayName || ev.name || 'unnamed'}(${event})`);
             console.error(e.stack);
           }
         });
       }
-      return {
-        ran,
-        canceled: cancelable && canceled
-      };
+      return { ran, canceled };
     },
     emitJSON: function (event, data, cancelable) {
       return this.emit(event, JSON.parse(data), cancelable);
@@ -208,6 +205,8 @@ const fn = {
     }
     return status;
   },
+  set: (key, val) => localStorage.setItem(key, val),
+  isSet: (key, val = 'true') => localStorage.getItem(key) === val,
   toast: (arg) => {
     if (!window.SimpleToast) return false;
     SimpleToast(arg);
@@ -228,7 +227,7 @@ const fn = {
         textShadow: '#46231f 0px 0px 3px',
       },
     };
-    return localStorage.getItem(permission) === 'true' && fn.toast(arg);
+    return fn.isSet(permission) && fn.toast(arg);
   },
 };
 class Hotkey {

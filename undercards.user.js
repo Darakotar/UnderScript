@@ -380,8 +380,10 @@ eventManager.on("GameStart", function battleLogger() {
 
 eventManager.on('GameStart', function soundManager() {
   const canDisableMusic = typeof musicEnabled === 'boolean';
+  let spectating = true;
   let disabledMusic = false;
   let disabledSound = false;
+  let startedBGM = false;
 
   function isMusicDisabled() {
     return !fn.isSet('gameMusicDisabled', null);
@@ -406,17 +408,19 @@ eventManager.on('GameStart', function soundManager() {
       soundEnabled = true;
     }
   }
-  function stopMusic(audio) { // the "proper" way to stop audio (right as it starts)
+  function stopAudio(audio) {
     if (!(audio instanceof Audio)) return;
+    if (audio.readyState) return audio.pause();
+    // the "proper" way to stop audio (before it starts)
     audio.addEventListener('playing', function () {
       audio.pause();
     });
   }
-  function playMusic(src, { volume = 0.2, repeat = false, force = false }) {
-    if (!force && canDisableMusic ? !musicEnabled : isMusicDisabled()) return;
+  function playMusic(src, opts = { volume: 0.2 }) {
+    if (!opts.force && canDisableMusic ? !musicEnabled : isMusicDisabled()) return;
     music = new Audio(src);
-    music.volume = volume;
-    if (repeat) {
+    music.volume = opts.volume || 0.2;
+    if (opts.repeat) {
       music.addEventListener('ended', function () {
         this.currentTime = 0;
         this.play();
@@ -426,6 +430,9 @@ eventManager.on('GameStart', function soundManager() {
   }
 
   eventManager.on('GameEvent', restoreAudio);
+  eventManager.on('PlayingGame', function () {
+    spectating = false;
+  });
   eventManager.on('getGameStarted:before getReconnection:before', function disableBGM(data) {
     if (fn.isSet('setting.disable.bgm')) disableMusic();
   }).on('getGameStarted:before', function disableGameStart(data) {
@@ -438,6 +445,7 @@ eventManager.on('GameStart', function soundManager() {
     // set the new background (ugh)
     $('body').css('background', `#000 url('images/backgrounds/${numBackground}.png') no-repeat`);
     playMusic(`musics/themes/${numBackground}.ogg`, { volume: 0.1, repeat: true });
+    startedBGM = true;
   });
   eventManager.on('getCardBoard:before', function disableLegendary(data) {
     const card = JSON.parse(data.card);
@@ -522,14 +530,16 @@ eventManager.on('GameStart', function soundManager() {
     }
   });
   eventManager.on('getResult:before', function restoreSpectateMusic(data) {
+    if (startedBGM) stopAudio(music);
     // getResult hasn't been canceled, music is disabled, we disable spectateMusic
-    if (!this.canceled || isMusicDisabled() || fn.isSet('setting.disable.spectateMusic')) return;
+    if (!this.canceled || isMusicDisabled() || fn.isSet('setting.disable.finish.spectate')) return;
     // Play the music, because it got canceled >.>
     playMusic('musics/victory.ogg');
   }).on('getResult', function stopSpectateMusic(data) {
     // music is undefined, music is not disabled, we do not disable spectate music
-    if (typeof music === 'undefined' || !isMusicDisabled() || !fn.isSet('setting.disable.spectateMusic')) return;
-    stopMusic(music);
+    if (typeof music === 'undefined' || !isMusicDisabled() && !fn.isSet('setting.disable.finish.spectate')) return;
+    // if music != undefined && (isMusicDisabled || DisableFinish)
+    stopAudio(music);
   });
   // Override toggleMusic?
 });
